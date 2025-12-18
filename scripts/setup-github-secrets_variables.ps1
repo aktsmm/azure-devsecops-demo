@@ -14,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 # ============================================================
 
 # 自分の GitHub リポジトリを設定（例: "your-username/your-repo"）
-$DefaultRepo = 'your-username/your-repo'
+$DefaultRepo = 'aktsmm/azure-devsecops-demo'
 
 # パスワード一括変更機能
 Write-Host '================================' -ForegroundColor Cyan
@@ -101,12 +101,12 @@ Write-Host '✅ 必須設定: 完了' -ForegroundColor Green
 Write-Host ''
 
 $GitHubSecrets = @{
-	AZURE_SUBSCRIPTION_ID = $AzureCredentials['AZURE_SUBSCRIPTION_ID']
+	AZURE_CLIENT_SECRET    = $AzureCredentials['AZURE_CLIENT_SECRET']
+	AZURE_SUBSCRIPTION_ID  = $AzureCredentials['AZURE_SUBSCRIPTION_ID']
 }
 
 $GitHubVariables = @{
 	AZURE_CLIENT_ID          = $AzureCredentials['AZURE_CLIENT_ID']
-	AZURE_CLIENT_SECRET      = $AzureCredentials['AZURE_CLIENT_SECRET']
 	AZURE_TENANT_ID          = $AzureCredentials['AZURE_TENANT_ID']
     
 	RESOURCE_GROUP_NAME      = 'RG-bbs-app-demo'
@@ -272,7 +272,8 @@ $summary = @"
 "@
 
 foreach ($entry in $GitHubSecrets.GetEnumerator() | Sort-Object Key) {
-	$summary += "`n  $($entry.Key) = $($entry.Value)"
+	$secretValue = if ($entry.Key -eq 'AZURE_CLIENT_SECRET') { '********' } else { $entry.Value }
+	$summary += "`n  $($entry.Key) = $secretValue"
 }
 
 $summary += "`n`n【GitHub Variables】"

@@ -2,8 +2,8 @@
 
 ## 1. ルール
 
-- **Secrets** は GitHub Actions からもマスクされるため、Subscription ID を格納します。本来であればその他クレデンシャルもシークレットにすべきですが、今回はデモ用のため Subscription ID 以外は Variables に格納しています。
-- **Variables** は値がログに出力される可能性があるため、低機密情報またはクロスワークフローで共通のパラメーターに使用します。
+- **Secrets** は GitHub Actions からもマスクされるため、`AZURE_CLIENT_SECRET` や `AZURE_SUBSCRIPTION_ID` など機密度の高い値を格納します。
+- **Variables** は値がログに出力される可能性があるため、`AZURE_CLIENT_ID` や `AZURE_TENANT_ID` など低機密の識別子やクロスワークフロー共通のパラメーターに使用します。
 - 値の一括投入: `scripts/setup-github-secrets_variables.ps1`（`-Repo` 省略時は `$DefaultRepo` → git remote → 対話入力の順で解決）
 - `AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID` は `scripts/create-github-actions-sp.ps1` で発行した Service Principal 情報を転記する。ダミー値はデモ確認用であり、本番では必ず再生成する。
 
@@ -11,6 +11,7 @@
 
 | キー                    | 用途 / 参照箇所                                                                                                                                                  |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AZURE_CLIENT_SECRET`   | すべての `azure/login@v2` のクライアントシークレット。`scripts/setup-github-secrets_variables.*` で Secret として登録                                            |
 | `AZURE_SUBSCRIPTION_ID` | すべての `azure/login@v2` で使用。`1-infra-deploy.yml`, `2-board-app-build-deploy.yml`, `2-admin-app-build-deploy.yml`, `backup-upload.yml`, `security-scan.yml` |
 
 ## 3. GitHub Variables 一覧
@@ -18,7 +19,6 @@
 | キー                                        | 用途 / 参照ワークフロー                                                                             |
 | ------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `AZURE_CLIENT_ID`                           | 全ワークフローの `azure/login@v2`                                                                   |
-| `AZURE_CLIENT_SECRET`                       | 同上 (現在は Variable。秘匿度を高めたい場合は Secret へ移行してください)                            |
 | `AZURE_TENANT_ID`                           | 同上                                                                                                |
 | `RESOURCE_GROUP_NAME`                       | 全ワークフロー (ACR/Storage 解決、`az group create`)                                                |
 | `LOCATION`                                  | `1-infra-deploy.yml` (RG 作成、Policy パラメーター)                                                 |

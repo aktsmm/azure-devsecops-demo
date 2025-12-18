@@ -110,8 +110,8 @@ Copilot は必ず以下を実装する：
 - Secrets/Variables:
   - `AZURE_CLIENT_ID` (Variables)
   - `AZURE_TENANT_ID` (Variables)
-  - `AZURE_CLIENT_SECRET` (Variables)
-  - `AZURE_SUBSCRIPTION_ID` (Secrets)
+   - `AZURE_CLIENT_SECRET` (Secrets)
+   - `AZURE_SUBSCRIPTION_ID` (Secrets)
 - コード内に Subscription ID・GUID を埋め込まない
 
 ---

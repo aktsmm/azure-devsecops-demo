@@ -13,7 +13,7 @@
 - 認証方式: Client Secret。GitHub Actions では以下を使用します。
   - `vars.AZURE_CLIENT_ID`
   - `vars.AZURE_TENANT_ID`
-  - `vars.AZURE_CLIENT_SECRET`
+  - `secrets.AZURE_CLIENT_SECRET`
   - `secrets.AZURE_SUBSCRIPTION_ID`
 
 ## 2. GitHub Actions での認証利用箇所
@@ -67,7 +67,7 @@
 ## 6. 最小権限への移行ヒント
 
 - Container App の Managed Identity には、実運用では Storage Blob Data Reader 程度に制限し、Subscription レベルの Contributor を削除してください。
-- GitHub Variables に平文で保存している `AZURE_CLIENT_SECRET` は Secret へ移設することで監査ログが強化されます。
+- `AZURE_CLIENT_SECRET` は GitHub Secrets に格納し、Variables には残さない。ローテーション時は Secrets を更新してワークフローの再実行で反映させます。
 - `backup-upload` で使用する `MYSQL_ROOT_PASSWORD` は GitHub Variable ですが、シークレットに移行可能です。
 
 ## 7. 監査ログ
