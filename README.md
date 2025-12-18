@@ -137,14 +137,14 @@ gh run list --workflow "1️⃣ Infrastructure Deploy" --limit 5 --json database
 - **ログ統合**: 現在は AKS Control Plane・Container Apps・Storage からの診断ログ/メトリックを `logAnalytics.outputs.id` に集約済み。VM (MySQL) の Syslog やバックアップスクリプトのログを Log Analytics へ転送するには Azure Monitor Agent + Data Collection Rule の構成が必要であり（参考: [Collect Syslog events from virtual machine client with Azure Monitor](https://learn.microsoft.com/azure/azure-monitor/vm/data-collection-syslog)、[Azure Monitor Agent overview](https://learn.microsoft.com/azure/azure-monitor/agents/azure-monitor-agent-overview)）、本リポジトリではまだ未導入です。次回の IaC 更新で `vm.bicep` に Data Collection Rule と Association を追加する計画を README_INFRASTRUCTURE に記載しています。
 - **GitGuardian API キー**: `vars.GITGUARDIAN_API_KEY` を登録すると Security Scan ワークフロー内の GitGuardian ジョブが有効化され、`security-scan` の Step Summary とカテゴリ別アラートに GitGuardian の検出結果が集計されます。未設定の場合は GitGuardian ジョブのみスキップされるため、環境に応じて設定可否を判断してください。あわせて `workflow_dispatch` で `skip_board_scans=true` を渡すと、Board 向けの Gitleaks/GitGuardian/Trivy(IaC) をまとめてスキップできるため、緊急時やリソース節約時の手動起動で役立ちます。
 - **dummy-secret 露出**: `public/dummy-secret.txt` はダミー値であり、本物の秘密情報を置かない。[`READMEs/README_SECRETS_VARIABLES.md`](READMEs/README_SECRETS_VARIABLES.md) にも明記。
-- **Service Principal 認証**: すべてのワークフローが `vars.AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID` と `secrets.AZURE_SUBSCRIPTION_ID` を使用。
+- **Service Principal 認証**: すべてのワークフローが `vars.AZURE_CLIENT_ID / AZURE_TENANT_ID` と `secrets.AZURE_CLIENT_SECRET / AZURE_SUBSCRIPTION_ID` を使用。
 - **Secrets/Variables 参照表**: 運用に必要なキーは README からも確認できるようにしています。詳細は [`READMEs/README_SECRETS_VARIABLES.md`](READMEs/README_SECRETS_VARIABLES.md) を参照してください。
 
 | 区分     | キー                       | 役割 / 参照ワークフロー                                                               |
 | -------- | -------------------------- | ------------------------------------------------------------------------------------- |
+| Secret   | `AZURE_CLIENT_SECRET`      | すべての `azure/login@v2` のクライアントシークレット                                  |
 | Secret   | `AZURE_SUBSCRIPTION_ID`    | すべての `azure/login@v2` で Subscription を指定                                      |
 | Variable | `AZURE_CLIENT_ID`          | 全ワークフロー共通の Service Principal 認証                                           |
-| Variable | `AZURE_CLIENT_SECRET`      | 同上。秘匿度が気になる場合は Secret への移行も可                                      |
 | Variable | `AZURE_TENANT_ID`          | 同上                                                                                  |
 | Variable | `RESOURCE_GROUP_NAME`      | `1-infra`, `2-board-app`, `2-admin-app`, `backup-upload` など RG 指定が必要なステップ |
 | Variable | `LOCATION`                 | `1-infra` で RG/Policy の配置リージョンを指定                                         |
@@ -164,7 +164,7 @@ gh run list --workflow "1️⃣ Infrastructure Deploy" --limit 5 --json database
 | Variable | `ACA_ADMIN_PASSWORD`       | 同上                                                                                  |
 | Variable | `GITGUARDIAN_API_KEY`      | `security-scan.yml` の GitGuardian ジョブを有効化                                     |
 
-> デモ環境ではセットアップ手順を簡略化するため、Subscription ID 以外をあえて GitHub Variables で扱っています。本番運用では `AZURE_CLIENT_SECRET` や DB/VM パスワードなど秘匿性が高い値を Secrets 側へ移し、参照元 YAML も適宜更新してください。
+> デモ環境では GitHub Variables に残しているのは `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` など低機密の識別子のみで、`AZURE_CLIENT_SECRET` と `AZURE_SUBSCRIPTION_ID` は Secrets に格納します。本番運用では DB/VM パスワードなど他の秘匿値も Secrets 側へ移し、参照元 YAML も適宜更新してください。
 
 - **免責事項**: このリポジトリは MIT ライセンスです。作成者は本コード・手順の利用に伴ういかなる損害についても責任を負いません。自己責任でご利用ください。
 

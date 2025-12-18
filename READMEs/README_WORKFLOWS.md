@@ -3,7 +3,7 @@
 ## 0. 共通仕様
 
 - すべてのワークフローは **Service Principal + クライアントシークレット** 認証で Azure にログインします。
-- `vars.AZURE_CLIENT_ID / AZURE_CLIENT_SECRET / AZURE_TENANT_ID` と `secrets.AZURE_SUBSCRIPTION_ID` が未設定の場合は早期に失敗します。
+- `vars.AZURE_CLIENT_ID / AZURE_TENANT_ID` と `secrets.AZURE_CLIENT_SECRET / AZURE_SUBSCRIPTION_ID` が未設定の場合は早期に失敗します。
 - これらの資格情報は `scripts/create-github-actions-sp.ps1` を実行して生成し、`scripts/setup-github-secrets_variables.ps1` の `$AzureCredentials` へ転記してから `gh variable`/`gh secret` で登録します。プレースホルダーのまま実行するとエラーで制御されます。
 - セキュリティスキャン (Trivy, Gitleaks, CodeQL) は可能な限り **SARIF** を生成して Security タブへアップロードします (公開リポジトリ、または GitHub Advanced Security 契約済みプライベートリポジトリが対象)。
 - ビルド系ワークフローは成果物 (SBOM, SARIF, image metadata) を `actions/upload-artifact` で保存し、後続のデプロイ/セキュリティワークフローが参照できるようにしています。
@@ -186,4 +186,4 @@ gh run list --workflow "1️⃣ Infrastructure Deploy" --limit 5 --json runStart
 
 - ワークフローエラー時は `trouble_docs/*.md` に過去の事例があります。
 - AKS が 24 時間ポリシーで停止される環境では `trouble_docs/2025-11-26-aks-24h-auto-stop-recovery.md` を参照してください。
-- `AZURE_CLIENT_SECRET` を GitHub **Variables** に置いているため、権限を絞りたい場合は Secret へ移行し、YAML も修正してください。
+- `AZURE_CLIENT_SECRET` は GitHub **Secrets** に置き、`azure/login@v2` では `secrets.AZURE_CLIENT_SECRET` を参照します。DB/VM パスワードなど他の資格情報も可能な限り Secrets 化してください。

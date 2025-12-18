@@ -292,7 +292,6 @@ echo "--- Repository Variables ---"
 
 # Azure 認証関連
 set_github_variable "AZURE_CLIENT_ID" "$AZURE_CLIENT_ID"
-set_github_variable "AZURE_CLIENT_SECRET" "$AZURE_CLIENT_SECRET"
 set_github_variable "AZURE_TENANT_ID" "$AZURE_TENANT_ID"
 
 # インフラ設定
@@ -338,6 +337,7 @@ fi
 
 echo ""
 echo "--- Repository Secrets ---"
+set_github_secret "AZURE_CLIENT_SECRET" "$AZURE_CLIENT_SECRET"
 set_github_secret "AZURE_SUBSCRIPTION_ID" "$AZURE_SUBSCRIPTION_ID"
 
 echo ""
@@ -354,11 +354,11 @@ cat << EOF
 リポジトリ: $REPO
 
 【GitHub Secrets】
-  AZURE_SUBSCRIPTION_ID = $AZURE_SUBSCRIPTION_ID
+    AZURE_CLIENT_SECRET = ********
+    AZURE_SUBSCRIPTION_ID = $AZURE_SUBSCRIPTION_ID
 
 【GitHub Variables】
   AZURE_CLIENT_ID = $AZURE_CLIENT_ID
-  AZURE_CLIENT_SECRET = ********
   AZURE_TENANT_ID = $AZURE_TENANT_ID
   RESOURCE_GROUP_NAME = $RESOURCE_GROUP_NAME
   LOCATION = $LOCATION

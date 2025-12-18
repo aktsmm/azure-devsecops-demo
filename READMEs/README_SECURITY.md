@@ -65,7 +65,7 @@
 
 ## 7. 改善候補
 
-1. GitHub Variables に保存している `AZURE_CLIENT_SECRET`, `DB_APP_PASSWORD` などを Secrets へ移行し、ワークフロー YAML を更新。
+1. `AZURE_CLIENT_SECRET` は GitHub Secrets に格納し、`DB_APP_PASSWORD` など他の資格情報も Secrets へ移行してワークフロー YAML を更新。
 2. Container App Managed Identity のロールをリソースグループ単位で最小化 (例: Storage Blob Data Reader + Key Vault Secrets User)。
 3. VM NSG の送信元制限、または Azure Firewall / Private Link 経由のアクセスに変更。
 4. Security Scan をブロッキングにする場合は Trivy/Gitleaks の `exit-code` を 1 に設定し、PR をブロック。

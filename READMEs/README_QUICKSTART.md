@@ -302,6 +302,8 @@ chmod +x ./scripts/setup-github-secrets_variables.sh
 
 **GitHub Secrets（機密情報）**:
 
+- `AZURE_CLIENT_SECRET` – Service Principal のクライアントシークレット  
+  ⚠️ **必須編集**: 手順 4 の出力値を転記。Variables には残さないでください
 - `AZURE_SUBSCRIPTION_ID` – Azure サブスクリプション ID  
   ⚠️ **必須編集**: 手順 4 の `create-github-actions-sp.ps1` 出力値を転記
 
@@ -311,8 +313,6 @@ chmod +x ./scripts/setup-github-secrets_variables.sh
 
 - `AZURE_CLIENT_ID` – Service Principal のクライアント ID  
   ⚠️ **必須編集**: 手順 4 の出力値を転記（デフォルト: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）
-- `AZURE_CLIENT_SECRET` – Service Principal のクライアントシークレット  
-  ⚠️ **必須編集**: 手順 4 の出力値を転記（デフォルト: `xxx~xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`）
 - `AZURE_TENANT_ID` – Azure テナント ID  
   ⚠️ **必須編集**: 手順 4 の出力値を転記（デフォルト: `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`）
 
@@ -358,8 +358,8 @@ chmod +x ./scripts/setup-github-secrets_variables.sh
 
 最低限必要な項目:
 
-- **Secrets**: `AZURE_SUBSCRIPTION_ID`
-- **Variables**: `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`, `RESOURCE_GROUP_NAME`, `LOCATION`, `ACR_NAME_PREFIX`, `STORAGE_ACCOUNT_PREFIX`, `AKS_CLUSTER_NAME`, `ACA_ENVIRONMENT_NAME`, `ADMIN_CONTAINER_APP_NAME`, `VM_NAME`, `VM_ADMIN_USERNAME`, `VM_ADMIN_PASSWORD`, `DB_APP_USERNAME`, `DB_APP_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `BACKUP_CONTAINER_NAME`, `ACA_ADMIN_USERNAME`, `ACA_ADMIN_PASSWORD` など。
+- **Secrets**: `AZURE_CLIENT_SECRET`, `AZURE_SUBSCRIPTION_ID`
+- **Variables**: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `RESOURCE_GROUP_NAME`, `LOCATION`, `ACR_NAME_PREFIX`, `STORAGE_ACCOUNT_PREFIX`, `AKS_CLUSTER_NAME`, `ACA_ENVIRONMENT_NAME`, `ADMIN_CONTAINER_APP_NAME`, `VM_NAME`, `VM_ADMIN_USERNAME`, `VM_ADMIN_PASSWORD`, `DB_APP_USERNAME`, `DB_APP_PASSWORD`, `MYSQL_ROOT_PASSWORD`, `BACKUP_CONTAINER_NAME`, `ACA_ADMIN_USERNAME`, `ACA_ADMIN_PASSWORD` など。
 
 ## 6. IaC (インフラ) デプロイ
 
