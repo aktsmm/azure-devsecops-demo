@@ -1,0 +1,213 @@
+# 環境レポート生成ワークフロー
+# Azure リソース（AKS/ACA/VM/Storage/ACR）の状態を収集してレポートを生成
+
+name: "📊 Environment Report"
+run-name: "📊 Environment Report – triggered by ${{ github.actor }}"
+
+on:
+    workflow_dispatch:
+        inputs:
+            resource_group:
+                description: "リソースグループ名"
+                required: false
+                default: "RG-bbs-app-demo"
+            output_issue:
+                description: "Issue に投稿する"
+                type: boolean
+                default: false
+    schedule:
+        # 毎週月曜 09:00 JST (00:00 UTC)
+        - cron: "0 0 * * 1"
+    workflow_run:
+        workflows: ["1️⃣ Infrastructure Deploy"]
+        types:
+            - completed
+
+permissions:
+    contents: write
+    issues: write
+    id-token: write
+
+env:
+    RESOURCE_GROUP: ${{ github.event.inputs.resource_group || vars.RESOURCE_GROUP || 'RG-bbs-app-demo' }}
+
+jobs:
+    generate-report:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Azure Login
+              uses: azure/login@v2
+              with:
+                  client-id: ${{ vars.AZURE_CLIENT_ID }}
+                  tenant-id: ${{ vars.AZURE_TENANT_ID }}
+                  subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+            - name: Collect Environment Data
+              id: collect
+              run: |
+                  echo "📊 環境情報を収集中..."
+
+                  REPORT_DATE=$(date +%Y-%m-%d)
+                  REPORT_TIME=$(date +%Y-%m-%dT%H:%M:%SZ)
+
+                  # AKS 状態取得
+                  echo "🔍 AKS状態を取得..."
+                  AKS_INFO=$(az aks list --resource-group ${{ env.RESOURCE_GROUP }} --query "[0]" -o json 2>/dev/null || echo '{}')
+                  AKS_NAME=$(echo $AKS_INFO | jq -r '.name // "N/A"')
+                  AKS_STATUS=$(echo $AKS_INFO | jq -r '.provisioningState // "N/A"')
+                  AKS_VERSION=$(echo $AKS_INFO | jq -r '.kubernetesVersion // "N/A"')
+                  AKS_NODE_COUNT=$(echo $AKS_INFO | jq -r '.agentPoolProfiles[0].count // 0')
+
+                  # ACA 状態取得
+                  echo "🔍 ACA状態を取得..."
+                  ACA_INFO=$(az containerapp list --resource-group ${{ env.RESOURCE_GROUP }} --query "[0]" -o json 2>/dev/null || echo '{}')
+                  ACA_NAME=$(echo $ACA_INFO | jq -r '.name // "N/A"')
+                  ACA_STATUS=$(echo $ACA_INFO | jq -r '.properties.provisioningState // "N/A"')
+
+                  # VM 状態取得
+                  echo "🔍 VM状態を取得..."
+                  VM_INFO=$(az vm list --resource-group ${{ env.RESOURCE_GROUP }} --query "[0]" -o json 2>/dev/null || echo '{}')
+                  VM_NAME=$(echo $VM_INFO | jq -r '.name // "N/A"')
+                  VM_SIZE=$(echo $VM_INFO | jq -r '.hardwareProfile.vmSize // "N/A"')
+
+                  # Storage 状態取得
+                  echo "🔍 Storage状態を取得..."
+                  STORAGE_INFO=$(az storage account list --resource-group ${{ env.RESOURCE_GROUP }} --query "[0]" -o json 2>/dev/null || echo '{}')
+                  STORAGE_NAME=$(echo $STORAGE_INFO | jq -r '.name // "N/A"')
+                  STORAGE_STATUS=$(echo $STORAGE_INFO | jq -r '.provisioningState // "N/A"')
+
+                  # ACR 状態取得
+                  echo "🔍 ACR状態を取得..."
+                  ACR_INFO=$(az acr list --resource-group ${{ env.RESOURCE_GROUP }} --query "[0]" -o json 2>/dev/null || echo '{}')
+                  ACR_NAME=$(echo $ACR_INFO | jq -r '.name // "N/A"')
+                  ACR_STATUS=$(echo $ACR_INFO | jq -r '.provisioningState // "N/A"')
+
+                  # ヘルスサマリー計算
+                  HEALTHY=0
+                  UNHEALTHY=0
+                  for status in "$AKS_STATUS" "$ACA_STATUS" "$STORAGE_STATUS" "$ACR_STATUS"; do
+                    if [[ "$status" == "Succeeded" || "$status" == "Running" ]]; then
+                      ((HEALTHY++))
+                    elif [[ "$status" != "N/A" ]]; then
+                      ((UNHEALTHY++))
+                    fi
+                  done
+
+                  # 環境変数に保存
+                  echo "REPORT_DATE=$REPORT_DATE" >> $GITHUB_OUTPUT
+                  echo "REPORT_TIME=$REPORT_TIME" >> $GITHUB_OUTPUT
+                  echo "AKS_NAME=$AKS_NAME" >> $GITHUB_OUTPUT
+                  echo "AKS_STATUS=$AKS_STATUS" >> $GITHUB_OUTPUT
+                  echo "AKS_VERSION=$AKS_VERSION" >> $GITHUB_OUTPUT
+                  echo "AKS_NODE_COUNT=$AKS_NODE_COUNT" >> $GITHUB_OUTPUT
+                  echo "ACA_NAME=$ACA_NAME" >> $GITHUB_OUTPUT
+                  echo "ACA_STATUS=$ACA_STATUS" >> $GITHUB_OUTPUT
+                  echo "VM_NAME=$VM_NAME" >> $GITHUB_OUTPUT
+                  echo "VM_SIZE=$VM_SIZE" >> $GITHUB_OUTPUT
+                  echo "STORAGE_NAME=$STORAGE_NAME" >> $GITHUB_OUTPUT
+                  echo "STORAGE_STATUS=$STORAGE_STATUS" >> $GITHUB_OUTPUT
+                  echo "ACR_NAME=$ACR_NAME" >> $GITHUB_OUTPUT
+                  echo "ACR_STATUS=$ACR_STATUS" >> $GITHUB_OUTPUT
+                  echo "HEALTHY=$HEALTHY" >> $GITHUB_OUTPUT
+                  echo "UNHEALTHY=$UNHEALTHY" >> $GITHUB_OUTPUT
+
+            - name: Generate Report
+              id: report
+              run: |
+                  mkdir -p reports/environment
+                  REPORT_FILE="reports/environment/${{ steps.collect.outputs.REPORT_DATE }}.md"
+
+                  # ステータスバッジ関数
+                  badge() {
+                    case "$1" in
+                      Succeeded|Running) echo "✅" ;;
+                      Failed) echo "❌" ;;
+                      N/A) echo "⚪" ;;
+                      *) echo "🟡" ;;
+                    esac
+                  }
+
+                  cat << 'EOF' > $REPORT_FILE
+                  # 🌐 環境レポート
+
+                  **生成日時**: ${{ steps.collect.outputs.REPORT_TIME }}  
+                  **リソースグループ**: ${{ env.RESOURCE_GROUP }}  
+                  **生成元**: environment-reporter エージェント
+
+                  ---
+
+                  ## 📊 サマリー
+
+                  | 指標 | 値 |
+                  |------|-----|
+                  | 正常 | ${{ steps.collect.outputs.HEALTHY }} |
+                  | 異常 | ${{ steps.collect.outputs.UNHEALTHY }} |
+
+                  ---
+
+                  ## 🖥️ リソース状態
+
+                  ### Azure Kubernetes Service (AKS)
+                  - **名前**: ${{ steps.collect.outputs.AKS_NAME }}
+                  - **状態**: $(badge "${{ steps.collect.outputs.AKS_STATUS }}") ${{ steps.collect.outputs.AKS_STATUS }}
+                  - **バージョン**: ${{ steps.collect.outputs.AKS_VERSION }}
+                  - **ノード数**: ${{ steps.collect.outputs.AKS_NODE_COUNT }}
+
+                  ### Azure Container Apps (ACA)
+                  - **名前**: ${{ steps.collect.outputs.ACA_NAME }}
+                  - **状態**: $(badge "${{ steps.collect.outputs.ACA_STATUS }}") ${{ steps.collect.outputs.ACA_STATUS }}
+
+                  ### Virtual Machine (VM)
+                  - **名前**: ${{ steps.collect.outputs.VM_NAME }}
+                  - **サイズ**: ${{ steps.collect.outputs.VM_SIZE }}
+
+                  ### Storage Account
+                  - **名前**: ${{ steps.collect.outputs.STORAGE_NAME }}
+                  - **状態**: $(badge "${{ steps.collect.outputs.STORAGE_STATUS }}") ${{ steps.collect.outputs.STORAGE_STATUS }}
+
+                  ### Azure Container Registry (ACR)
+                  - **名前**: ${{ steps.collect.outputs.ACR_NAME }}
+                  - **状態**: $(badge "${{ steps.collect.outputs.ACR_STATUS }}") ${{ steps.collect.outputs.ACR_STATUS }}
+
+                  ---
+
+                  <details>
+                  <summary>📎 メタデータ</summary>
+
+                  - **レポートバージョン**: 1.0
+                  - **生成エージェント**: environment-reporter
+                  - **実行ID**: ${{ github.run_id }}
+
+                  </details>
+                  EOF
+
+                  echo "REPORT_FILE=$REPORT_FILE" >> $GITHUB_OUTPUT
+
+                  # Job Summary に出力
+                  cat $REPORT_FILE >> $GITHUB_STEP_SUMMARY
+
+            - name: Commit Report
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add reports/
+                  git diff --staged --quiet || git commit -m "📊 環境レポート追加: ${{ steps.collect.outputs.REPORT_DATE }}"
+                  git push || echo "No changes to push"
+
+            - name: Create Issue (Optional)
+              if: ${{ github.event.inputs.output_issue == 'true' }}
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      const fs = require('fs');
+                      const reportContent = fs.readFileSync('${{ steps.report.outputs.REPORT_FILE }}', 'utf8');
+                      await github.rest.issues.create({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        title: '📊 環境レポート ${{ steps.collect.outputs.REPORT_DATE }}',
+                        body: reportContent,
+                        labels: ['report', 'environment']
+                      });

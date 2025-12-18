@@ -1,0 +1,182 @@
+# トラブルシューティングドキュメント自動生成ワークフロー
+# ワークフロー失敗時に trouble_docs/ に自動でドキュメントを生成
+
+name: "🔧 Troubleshoot Doc Generator"
+run-name: "🔧 Troubleshoot Doc Generator – triggered by ${{ github.actor }}"
+
+on:
+    workflow_dispatch:
+        inputs:
+            run_id:
+                description: "対象のワークフロー実行ID"
+                required: true
+    workflow_run:
+        workflows:
+            - "1️⃣ Infrastructure Deploy"
+            - "2️⃣ Build Board App"
+            - "3️⃣ Deploy Board App"
+            - "4️⃣ Build Admin App"
+            - "5️⃣ Deploy Admin App"
+        types:
+            - completed
+
+permissions:
+    contents: write
+    actions: read
+
+jobs:
+    generate-troubleshoot-doc:
+        # 失敗時または手動実行時のみ
+        if: ${{ github.event.workflow_run.conclusion == 'failure' || github.event_name == 'workflow_dispatch' }}
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Get Failed Workflow Info
+              id: info
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  echo "🔧 失敗ワークフロー情報を収集中..."
+
+                  # 対象の run_id を決定
+                  if [ -n "${{ github.event.inputs.run_id }}" ]; then
+                    RUN_ID="${{ github.event.inputs.run_id }}"
+                  else
+                    RUN_ID="${{ github.event.workflow_run.id }}"
+                  fi
+
+                  REPORT_DATE=$(date +%Y-%m-%d)
+
+                  # ワークフロー実行情報を取得
+                  RUN_INFO=$(gh run view $RUN_ID --json name,conclusion,createdAt,updatedAt,headBranch,event,jobs -q '.')
+
+                  WORKFLOW_NAME=$(echo $RUN_INFO | jq -r '.name')
+                  CONCLUSION=$(echo $RUN_INFO | jq -r '.conclusion')
+                  CREATED_AT=$(echo $RUN_INFO | jq -r '.createdAt')
+                  BRANCH=$(echo $RUN_INFO | jq -r '.headBranch')
+                  EVENT=$(echo $RUN_INFO | jq -r '.event')
+
+                  # 失敗したジョブを取得
+                  FAILED_JOBS=$(echo $RUN_INFO | jq -r '.jobs[] | select(.conclusion=="failure") | .name' | head -5)
+
+                  # ログ取得
+                  echo "📜 失敗ログを取得中..."
+                  gh run view $RUN_ID --log-failed > /tmp/failed_log.txt 2>/dev/null || echo "ログ取得失敗" > /tmp/failed_log.txt
+
+                  # エラーメッセージ抽出（最後の50行）
+                  ERROR_MESSAGES=$(tail -50 /tmp/failed_log.txt | grep -i "error\|failed\|exception" | head -10 || echo "エラーメッセージ取得失敗")
+
+                  # ファイル名をサニタイズ
+                  SAFE_NAME=$(echo "$WORKFLOW_NAME" | tr ' ' '-' | tr -cd '[:alnum:]-' | tr '[:upper:]' '[:lower:]')
+                  DOC_FILENAME="${REPORT_DATE}-${SAFE_NAME}.md"
+
+                  echo "RUN_ID=$RUN_ID" >> $GITHUB_OUTPUT
+                  echo "REPORT_DATE=$REPORT_DATE" >> $GITHUB_OUTPUT
+                  echo "WORKFLOW_NAME=$WORKFLOW_NAME" >> $GITHUB_OUTPUT
+                  echo "CONCLUSION=$CONCLUSION" >> $GITHUB_OUTPUT
+                  echo "CREATED_AT=$CREATED_AT" >> $GITHUB_OUTPUT
+                  echo "BRANCH=$BRANCH" >> $GITHUB_OUTPUT
+                  echo "EVENT=$EVENT" >> $GITHUB_OUTPUT
+                  echo "FAILED_JOBS<<EOF" >> $GITHUB_OUTPUT
+                  echo "$FAILED_JOBS" >> $GITHUB_OUTPUT
+                  echo "EOF" >> $GITHUB_OUTPUT
+                  echo "ERROR_MESSAGES<<EOF" >> $GITHUB_OUTPUT
+                  echo "$ERROR_MESSAGES" >> $GITHUB_OUTPUT
+                  echo "EOF" >> $GITHUB_OUTPUT
+                  echo "DOC_FILENAME=$DOC_FILENAME" >> $GITHUB_OUTPUT
+
+            - name: Generate Troubleshoot Document
+              id: doc
+              run: |
+                  mkdir -p trouble_docs
+                  DOC_FILE="trouble_docs/${{ steps.info.outputs.DOC_FILENAME }}"
+
+                  cat << 'DOCEOF' > $DOC_FILE
+                  # 🔧 トラブルシューティング: ${{ steps.info.outputs.WORKFLOW_NAME }}
+
+                  **発生日時**: ${{ steps.info.outputs.CREATED_AT }}  
+                  **ステータス**: ❌ ${{ steps.info.outputs.CONCLUSION }}  
+                  **ブランチ**: `${{ steps.info.outputs.BRANCH }}`  
+                  **トリガー**: ${{ steps.info.outputs.EVENT }}  
+                  **実行ID**: ${{ steps.info.outputs.RUN_ID }}
+
+                  ---
+
+                  ## 🔍 失敗したジョブ
+
+                  ```
+                  ${{ steps.info.outputs.FAILED_JOBS }}
+                  ```
+
+                  ---
+
+                  ## ❌ エラーメッセージ
+
+                  ```
+                  ${{ steps.info.outputs.ERROR_MESSAGES }}
+                  ```
+
+                  ---
+
+                  ## 📋 確認事項チェックリスト
+
+                  - [ ] エラーメッセージを確認した
+                  - [ ] 同様のエラーが過去にあるか確認した
+                  - [ ] 関連するリソースの状態を確認した
+                  - [ ] 必要なシークレット/変数が設定されているか確認した
+                  - [ ] 依存サービス（Azure, GitHub等）の障害を確認した
+
+                  ---
+
+                  ## 💡 考えられる原因
+
+                  1. **リソース不足**: Azure リソースのクォータ制限
+                  2. **認証エラー**: Service Principal の期限切れまたは権限不足
+                  3. **ネットワーク問題**: 一時的な接続障害
+                  4. **設定ミス**: パラメータファイルの値が不正
+                  5. **依存関係**: 必要なリソースが未作成
+
+                  ---
+
+                  ## 🔧 解決策（調査後に記入）
+
+                  **根本原因**:
+                  > ここに根本原因を記入
+
+                  **解決方法**:
+                  > ここに解決方法を記入
+
+                  **再発防止策**:
+                  > ここに再発防止策を記入
+
+                  ---
+
+                  ## 📎 関連リンク
+
+                  - [ワークフロー実行ログ](https://github.com/${{ github.repository }}/actions/runs/${{ steps.info.outputs.RUN_ID }})
+                  - [関連する trouble_docs](../trouble_docs/)
+
+                  ---
+
+                  <details>
+                  <summary>📎 メタデータ</summary>
+
+                  - **生成エージェント**: troubleshooter
+                  - **自動生成日時**: ${{ steps.info.outputs.REPORT_DATE }}
+                  - **テンプレートバージョン**: 1.0
+
+                  </details>
+                  DOCEOF
+
+                  echo "DOC_FILE=$DOC_FILE" >> $GITHUB_OUTPUT
+                  cat $DOC_FILE >> $GITHUB_STEP_SUMMARY
+
+            - name: Commit Document
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add trouble_docs/
+                  git diff --staged --quiet || git commit -m "🔧 トラブルシューティングドキュメント追加: ${{ steps.info.outputs.DOC_FILENAME }}"
+                  git push || echo "No changes to push"

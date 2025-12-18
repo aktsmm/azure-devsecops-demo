@@ -110,8 +110,8 @@ Copilot は必ず以下を実装する：
 - Secrets/Variables:
   - `AZURE_CLIENT_ID` (Variables)
   - `AZURE_TENANT_ID` (Variables)
-   - `AZURE_CLIENT_SECRET` (Secrets)
-   - `AZURE_SUBSCRIPTION_ID` (Secrets)
+  - `AZURE_CLIENT_SECRET` (Secrets)
+  - `AZURE_SUBSCRIPTION_ID` (Secrets)
 - コード内に Subscription ID・GUID を埋め込まない
 
 ---
@@ -229,3 +229,40 @@ Copilot は生成時に必ず以下を守る：
 8. **再現性（他者環境で動く）**
 9. **コマンドはユーザー確認なしで即時実行可（CI/CD 実行・検証の迅速性を優先）**
 10. **Azure CLI / Azure PowerShell / GitHub CLI の利用を標準手段として明記**
+
+---
+
+## 🤖 エージェント（自動レポート生成）
+
+このリポジトリには自動レポート生成エージェントが含まれています。
+
+### エージェント一覧
+
+| エージェント            | 目的                         | トリガー                  |
+| ----------------------- | ---------------------------- | ------------------------- |
+| 🌐 Environment Reporter | Azure リソース状態収集       | 週次 / インフラデプロイ後 |
+| 💰 Cost Analyzer        | コスト分析・最適化提案       | 月次                      |
+| 🔐 Security Auditor     | セキュリティスキャン結果集約 | 週次 / スキャン完了後     |
+| 🔄 Workflow Health      | GitHub Actions 成功率分析    | 週次                      |
+| 🔧 Troubleshooter       | 失敗時のドキュメント自動生成 | ワークフロー失敗時        |
+| 📝 Deploy Diff          | Bicep What-If 結果整形       | 手動                      |
+
+### ファイル構成
+
+```
+.github/
+├── agents/           # エージェント定義（プロンプト）
+├── instructions/     # インストラクション
+└── workflows/        # 実行ワークフロー（report-*.yml）
+```
+
+詳細は [AGENTS.md](../AGENTS.md) を参照してください。
+
+### エージェント設計ルール
+
+エージェント開発時は以下を遵守：
+
+1. **2 段階アーキテクチャ**: Input → IR（中間表現）→ Output
+2. **冪等性**: 同じ入力なら同じ出力
+3. **エラーハンドリング**: 失敗しても安全にフォールバック
+4. **出力先**: `reports/{type}/{date}.md` + Job Summary

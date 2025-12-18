@@ -1,0 +1,191 @@
+# セキュリティ監査レポート生成ワークフロー
+# CodeQL/Trivy/GitGuardian のスキャン結果を集約してレポートを生成
+
+name: "🔐 Security Audit Report"
+run-name: "🔐 Security Audit Report – triggered by ${{ github.actor }}"
+
+on:
+    workflow_dispatch:
+        inputs:
+            output_issue:
+                description: "Issue に投稿する"
+                type: boolean
+                default: false
+    schedule:
+        # 毎週月曜 10:00 JST (01:00 UTC)
+        - cron: "0 1 * * 1"
+    workflow_run:
+        workflows: ["🔐 Security Scan (CodeQL + Trivy + Gitleaks)"]
+        types:
+            - completed
+
+permissions:
+    contents: write
+    issues: write
+    security-events: read
+    actions: read
+
+jobs:
+    generate-report:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Collect Security Data
+              id: collect
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  echo "🔐 セキュリティスキャン結果を収集中..."
+
+                  REPORT_DATE=$(date +%Y-%m-%d)
+                  REPORT_TIME=$(date +%Y-%m-%dT%H:%M:%SZ)
+
+                  # CodeQL アラート取得
+                  echo "🔍 CodeQL結果を取得..."
+                  CODEQL_ALERTS=$(gh api \
+                    -H "Accept: application/vnd.github+json" \
+                    /repos/${{ github.repository }}/code-scanning/alerts?state=open \
+                    2>/dev/null || echo '[]')
+
+                  CODEQL_CRITICAL=$(echo $CODEQL_ALERTS | jq '[.[] | select(.rule.security_severity_level=="critical")] | length')
+                  CODEQL_HIGH=$(echo $CODEQL_ALERTS | jq '[.[] | select(.rule.security_severity_level=="high")] | length')
+                  CODEQL_MEDIUM=$(echo $CODEQL_ALERTS | jq '[.[] | select(.rule.security_severity_level=="medium")] | length')
+                  CODEQL_LOW=$(echo $CODEQL_ALERTS | jq '[.[] | select(.rule.security_severity_level=="low")] | length')
+
+                  # Secret scanning アラート取得
+                  echo "🔍 Secret scanning結果を取得..."
+                  SECRET_ALERTS=$(gh api \
+                    -H "Accept: application/vnd.github+json" \
+                    /repos/${{ github.repository }}/secret-scanning/alerts?state=open \
+                    2>/dev/null || echo '[]')
+                  SECRET_COUNT=$(echo $SECRET_ALERTS | jq 'length')
+
+                  # Dependabot アラート取得
+                  echo "🔍 Dependabot結果を取得..."
+                  DEPENDABOT_ALERTS=$(gh api \
+                    -H "Accept: application/vnd.github+json" \
+                    /repos/${{ github.repository }}/dependabot/alerts?state=open \
+                    2>/dev/null || echo '[]')
+
+                  DEP_CRITICAL=$(echo $DEPENDABOT_ALERTS | jq '[.[] | select(.security_advisory.severity=="critical")] | length')
+                  DEP_HIGH=$(echo $DEPENDABOT_ALERTS | jq '[.[] | select(.security_advisory.severity=="high")] | length')
+                  DEP_MEDIUM=$(echo $DEPENDABOT_ALERTS | jq '[.[] | select(.security_advisory.severity=="medium")] | length')
+                  DEP_LOW=$(echo $DEPENDABOT_ALERTS | jq '[.[] | select(.security_advisory.severity=="low")] | length')
+
+                  # セキュリティスコア計算（100点満点）
+                  TOTAL_ISSUES=$((CODEQL_CRITICAL + CODEQL_HIGH + CODEQL_MEDIUM + CODEQL_LOW + DEP_CRITICAL + DEP_HIGH + DEP_MEDIUM + DEP_LOW + SECRET_COUNT))
+                  CRITICAL_WEIGHT=$((CODEQL_CRITICAL * 25 + DEP_CRITICAL * 25))
+                  HIGH_WEIGHT=$((CODEQL_HIGH * 15 + DEP_HIGH * 15))
+                  MEDIUM_WEIGHT=$((CODEQL_MEDIUM * 5 + DEP_MEDIUM * 5))
+                  LOW_WEIGHT=$((CODEQL_LOW * 1 + DEP_LOW * 1))
+                  DEDUCTION=$((CRITICAL_WEIGHT + HIGH_WEIGHT + MEDIUM_WEIGHT + LOW_WEIGHT + SECRET_COUNT * 50))
+                  SECURITY_SCORE=$((100 - DEDUCTION))
+                  if [ $SECURITY_SCORE -lt 0 ]; then SECURITY_SCORE=0; fi
+
+                  echo "REPORT_DATE=$REPORT_DATE" >> $GITHUB_OUTPUT
+                  echo "REPORT_TIME=$REPORT_TIME" >> $GITHUB_OUTPUT
+                  echo "CODEQL_CRITICAL=$CODEQL_CRITICAL" >> $GITHUB_OUTPUT
+                  echo "CODEQL_HIGH=$CODEQL_HIGH" >> $GITHUB_OUTPUT
+                  echo "CODEQL_MEDIUM=$CODEQL_MEDIUM" >> $GITHUB_OUTPUT
+                  echo "CODEQL_LOW=$CODEQL_LOW" >> $GITHUB_OUTPUT
+                  echo "DEP_CRITICAL=$DEP_CRITICAL" >> $GITHUB_OUTPUT
+                  echo "DEP_HIGH=$DEP_HIGH" >> $GITHUB_OUTPUT
+                  echo "DEP_MEDIUM=$DEP_MEDIUM" >> $GITHUB_OUTPUT
+                  echo "DEP_LOW=$DEP_LOW" >> $GITHUB_OUTPUT
+                  echo "SECRET_COUNT=$SECRET_COUNT" >> $GITHUB_OUTPUT
+                  echo "TOTAL_ISSUES=$TOTAL_ISSUES" >> $GITHUB_OUTPUT
+                  echo "SECURITY_SCORE=$SECURITY_SCORE" >> $GITHUB_OUTPUT
+
+            - name: Generate Report
+              id: report
+              run: |
+                  mkdir -p reports/security
+                  REPORT_FILE="reports/security/${{ steps.collect.outputs.REPORT_DATE }}.md"
+
+                  # スコアバッジ
+                  SCORE=${{ steps.collect.outputs.SECURITY_SCORE }}
+                  if [ $SCORE -ge 90 ]; then SCORE_BADGE="🟢 Excellent"; 
+                  elif [ $SCORE -ge 70 ]; then SCORE_BADGE="🟡 Good";
+                  elif [ $SCORE -ge 50 ]; then SCORE_BADGE="🟠 Fair";
+                  else SCORE_BADGE="🔴 Poor"; fi
+
+                  cat << EOF > $REPORT_FILE
+                  # 🔐 セキュリティ監査レポート
+
+                  **生成日時**: ${{ steps.collect.outputs.REPORT_TIME }}  
+                  **リポジトリ**: ${{ github.repository }}  
+                  **生成元**: security-auditor エージェント
+
+                  ---
+
+                  ## 📊 セキュリティスコア: ${{ steps.collect.outputs.SECURITY_SCORE }}/100 $SCORE_BADGE
+
+                  ---
+
+                  ## 🔍 検出結果サマリー
+
+                  | ツール | Critical | High | Medium | Low |
+                  |--------|----------|------|--------|-----|
+                  | CodeQL | ${{ steps.collect.outputs.CODEQL_CRITICAL }} | ${{ steps.collect.outputs.CODEQL_HIGH }} | ${{ steps.collect.outputs.CODEQL_MEDIUM }} | ${{ steps.collect.outputs.CODEQL_LOW }} |
+                  | Dependabot | ${{ steps.collect.outputs.DEP_CRITICAL }} | ${{ steps.collect.outputs.DEP_HIGH }} | ${{ steps.collect.outputs.DEP_MEDIUM }} | ${{ steps.collect.outputs.DEP_LOW }} |
+
+                  ### 🔑 シークレット検出
+                  - **検出数**: ${{ steps.collect.outputs.SECRET_COUNT }}
+
+                  ---
+
+                  ## 📊 合計
+
+                  | 指標 | 値 |
+                  |------|-----|
+                  | 総検出数 | ${{ steps.collect.outputs.TOTAL_ISSUES }} |
+                  | Critical | $((steps.collect.outputs.CODEQL_CRITICAL + steps.collect.outputs.DEP_CRITICAL)) |
+                  | High | $((steps.collect.outputs.CODEQL_HIGH + steps.collect.outputs.DEP_HIGH)) |
+
+                  ---
+
+                  ## 💡 推奨アクション
+
+                  1. **Critical/High の脆弱性を優先対応**: 早急にパッチ適用またはライブラリ更新
+                  2. **シークレット漏洩の確認**: 検出されたシークレットはローテーションを検討
+                  3. **定期的なスキャン実行**: 週次でセキュリティスキャンを実行
+
+                  ---
+
+                  <details>
+                  <summary>📎 メタデータ</summary>
+
+                  - **レポートバージョン**: 1.0
+                  - **生成エージェント**: security-auditor
+                  - **実行ID**: ${{ github.run_id }}
+
+                  </details>
+                  EOF
+
+                  echo "REPORT_FILE=$REPORT_FILE" >> $GITHUB_OUTPUT
+                  cat $REPORT_FILE >> $GITHUB_STEP_SUMMARY
+
+            - name: Commit Report
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add reports/
+                  git diff --staged --quiet || git commit -m "🔐 セキュリティレポート追加: ${{ steps.collect.outputs.REPORT_DATE }}"
+                  git push || echo "No changes to push"
+
+            - name: Create Issue (Optional)
+              if: ${{ github.event.inputs.output_issue == 'true' }}
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      const fs = require('fs');
+                      const reportContent = fs.readFileSync('${{ steps.report.outputs.REPORT_FILE }}', 'utf8');
+                      await github.rest.issues.create({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        title: '🔐 セキュリティ監査レポート ${{ steps.collect.outputs.REPORT_DATE }}',
+                        body: reportContent,
+                        labels: ['report', 'security']
+                      });
