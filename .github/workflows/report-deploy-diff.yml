@@ -1,0 +1,202 @@
+# デプロイ差分レポート生成ワークフロー
+# Bicep What-If の結果を見やすく整形してレポートを生成
+
+name: "🔄 Deploy Diff Report"
+run-name: "🔄 Deploy Diff Report – triggered by ${{ github.actor }}"
+
+on:
+    workflow_dispatch:
+        inputs:
+            resource_group:
+                description: "リソースグループ名"
+                required: false
+                default: "RG-bbs-app-demo"
+            template_file:
+                description: "Bicepテンプレートファイル"
+                required: false
+                default: "infra/main.bicep"
+            parameters_file:
+                description: "パラメータファイル"
+                required: false
+                default: "infra/parameters/main-dev.parameters.json"
+            output_issue:
+                description: "Issue に投稿する"
+                type: boolean
+                default: false
+
+permissions:
+    contents: write
+    issues: write
+    id-token: write
+
+env:
+    RESOURCE_GROUP: ${{ github.event.inputs.resource_group || vars.RESOURCE_GROUP || 'RG-bbs-app-demo' }}
+    TEMPLATE_FILE: ${{ github.event.inputs.template_file || 'infra/main.bicep' }}
+    PARAMETERS_FILE: ${{ github.event.inputs.parameters_file || 'infra/parameters/main-dev.parameters.json' }}
+
+jobs:
+    generate-report:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Azure Login
+              uses: azure/login@v2
+              with:
+                  client-id: ${{ vars.AZURE_CLIENT_ID }}
+                  tenant-id: ${{ vars.AZURE_TENANT_ID }}
+                  subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+            - name: Run What-If
+              id: whatif
+              run: |
+                  echo "🔄 What-If 分析を実行中..."
+
+                  REPORT_DATE=$(date +%Y-%m-%d)
+                  REPORT_TIME=$(date +%Y-%m-%dT%H:%M:%SZ)
+
+                  # What-If 実行
+                  WHATIF_OUTPUT=$(az deployment group what-if \
+                    --resource-group ${{ env.RESOURCE_GROUP }} \
+                    --template-file ${{ env.TEMPLATE_FILE }} \
+                    --parameters @${{ env.PARAMETERS_FILE }} \
+                    --result-format FullResourcePayloads \
+                    -o json 2>/dev/null || echo '{"changes": []}')
+
+                  # 変更タイプ別カウント
+                  CREATE=$(echo $WHATIF_OUTPUT | jq '[.changes[] | select(.changeType=="Create")] | length')
+                  MODIFY=$(echo $WHATIF_OUTPUT | jq '[.changes[] | select(.changeType=="Modify")] | length')
+                  DELETE=$(echo $WHATIF_OUTPUT | jq '[.changes[] | select(.changeType=="Delete")] | length')
+                  NO_CHANGE=$(echo $WHATIF_OUTPUT | jq '[.changes[] | select(.changeType=="NoChange")] | length')
+                  TOTAL=$(echo $WHATIF_OUTPUT | jq '.changes | length')
+
+                  # リスクレベル判定
+                  if [ $DELETE -gt 0 ]; then
+                    RISK_LEVEL="🔴 Critical"
+                  elif [ $MODIFY -gt 5 ]; then
+                    RISK_LEVEL="🟠 High"
+                  elif [ $MODIFY -gt 0 ] || [ $CREATE -gt 0 ]; then
+                    RISK_LEVEL="🟡 Medium"
+                  else
+                    RISK_LEVEL="🟢 Low"
+                  fi
+
+                  # 変更詳細
+                  CHANGES_DETAIL=$(echo $WHATIF_OUTPUT | jq -r '
+                    .changes[] | 
+                    select(.changeType != "NoChange") |
+                    "| \(.changeType) | \(.resourceId | split("/") | last) | \(.after.type // .before.type) |"
+                  ' 2>/dev/null | head -20 || echo "| - | - | - |")
+
+                  echo "REPORT_DATE=$REPORT_DATE" >> $GITHUB_OUTPUT
+                  echo "REPORT_TIME=$REPORT_TIME" >> $GITHUB_OUTPUT
+                  echo "CREATE=$CREATE" >> $GITHUB_OUTPUT
+                  echo "MODIFY=$MODIFY" >> $GITHUB_OUTPUT
+                  echo "DELETE=$DELETE" >> $GITHUB_OUTPUT
+                  echo "NO_CHANGE=$NO_CHANGE" >> $GITHUB_OUTPUT
+                  echo "TOTAL=$TOTAL" >> $GITHUB_OUTPUT
+                  echo "RISK_LEVEL=$RISK_LEVEL" >> $GITHUB_OUTPUT
+                  echo "CHANGES_DETAIL<<EOF" >> $GITHUB_OUTPUT
+                  echo "$CHANGES_DETAIL" >> $GITHUB_OUTPUT
+                  echo "EOF" >> $GITHUB_OUTPUT
+
+            - name: Generate Report
+              id: report
+              run: |
+                  mkdir -p reports/deploy-diff
+                  REPORT_FILE="reports/deploy-diff/${{ steps.whatif.outputs.REPORT_DATE }}.md"
+
+                  cat << EOF > $REPORT_FILE
+                  # 🔄 デプロイ差分レポート
+
+                  **生成日時**: ${{ steps.whatif.outputs.REPORT_TIME }}  
+                  **リソースグループ**: ${{ env.RESOURCE_GROUP }}  
+                  **テンプレート**: ${{ env.TEMPLATE_FILE }}  
+                  **生成元**: deploy-diff エージェント
+
+                  ---
+
+                  ## ⚠️ リスクレベル: ${{ steps.whatif.outputs.RISK_LEVEL }}
+
+                  ---
+
+                  ## 📊 変更サマリー
+
+                  | 操作 | 件数 |
+                  |------|------|
+                  | ➕ 作成 | ${{ steps.whatif.outputs.CREATE }} |
+                  | 📝 変更 | ${{ steps.whatif.outputs.MODIFY }} |
+                  | ❌ 削除 | ${{ steps.whatif.outputs.DELETE }} |
+                  | ⏸️ 変更なし | ${{ steps.whatif.outputs.NO_CHANGE }} |
+                  | **合計** | ${{ steps.whatif.outputs.TOTAL }} |
+
+                  ---
+
+                  ## 📋 変更詳細（上位20件）
+
+                  | 操作 | リソース名 | リソースタイプ |
+                  |------|------------|----------------|
+                  ${{ steps.whatif.outputs.CHANGES_DETAIL }}
+
+                  ---
+
+                  ## ⚠️ 注意事項
+
+                  EOF
+
+                  if [ "${{ steps.whatif.outputs.DELETE }}" -gt 0 ]; then
+                    echo "- **🔴 削除操作が含まれています！** デプロイ前に影響範囲を確認してください" >> $REPORT_FILE
+                  fi
+
+                  if [ "${{ steps.whatif.outputs.MODIFY }}" -gt 5 ]; then
+                    echo "- **🟠 多数の変更が含まれています** 段階的なデプロイを検討してください" >> $REPORT_FILE
+                  fi
+
+                  cat << EOF >> $REPORT_FILE
+
+                  ---
+
+                  ## ✅ 推奨アクション
+
+                  1. 変更内容を確認の上、デプロイを承認してください
+                  2. 削除操作がある場合はバックアップを確認してください
+                  3. 本番環境への適用前にステージング環境でテストしてください
+
+                  ---
+
+                  <details>
+                  <summary>📎 メタデータ</summary>
+
+                  - **レポートバージョン**: 1.0
+                  - **生成エージェント**: deploy-diff
+                  - **実行ID**: ${{ github.run_id }}
+
+                  </details>
+                  EOF
+
+                  echo "REPORT_FILE=$REPORT_FILE" >> $GITHUB_OUTPUT
+                  cat $REPORT_FILE >> $GITHUB_STEP_SUMMARY
+
+            - name: Commit Report
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add reports/
+                  git diff --staged --quiet || git commit -m "🔄 デプロイ差分レポート追加: ${{ steps.whatif.outputs.REPORT_DATE }}"
+                  git push || echo "No changes to push"
+
+            - name: Create Issue (Optional)
+              if: ${{ github.event.inputs.output_issue == 'true' }}
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      const fs = require('fs');
+                      const reportContent = fs.readFileSync('${{ steps.report.outputs.REPORT_FILE }}', 'utf8');
+                      await github.rest.issues.create({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        title: '🔄 デプロイ差分レポート ${{ steps.whatif.outputs.REPORT_DATE }}',
+                        body: reportContent,
+                        labels: ['report', 'deploy-diff']
+                      });

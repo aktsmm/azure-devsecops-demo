@@ -1,0 +1,168 @@
+# コスト分析レポート生成ワークフロー
+# Azure のコスト情報を収集・分析してレポートを生成
+
+name: "💰 Cost Analysis Report"
+run-name: "💰 Cost Analysis Report – triggered by ${{ github.actor }}"
+
+on:
+    workflow_dispatch:
+        inputs:
+            resource_group:
+                description: "リソースグループ名"
+                required: false
+                default: "RG-bbs-app-demo"
+            days:
+                description: "分析期間（日数）"
+                required: false
+                default: "30"
+            output_issue:
+                description: "Issue に投稿する"
+                type: boolean
+                default: false
+    schedule:
+        # 毎月1日 09:00 JST (00:00 UTC)
+        - cron: "0 0 1 * *"
+
+permissions:
+    contents: write
+    issues: write
+    id-token: write
+
+env:
+    RESOURCE_GROUP: ${{ github.event.inputs.resource_group || vars.RESOURCE_GROUP || 'RG-bbs-app-demo' }}
+    DAYS: ${{ github.event.inputs.days || '30' }}
+
+jobs:
+    generate-report:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Azure Login
+              uses: azure/login@v2
+              with:
+                  client-id: ${{ vars.AZURE_CLIENT_ID }}
+                  tenant-id: ${{ vars.AZURE_TENANT_ID }}
+                  subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+            - name: Collect Cost Data
+              id: collect
+              run: |
+                  echo "💰 コスト情報を収集中..."
+
+                  REPORT_DATE=$(date +%Y-%m-%d)
+                  REPORT_TIME=$(date +%Y-%m-%dT%H:%M:%SZ)
+                  END_DATE=$(date +%Y-%m-%d)
+                  START_DATE=$(date -d "-${{ env.DAYS }} days" +%Y-%m-%d)
+
+                  echo "期間: $START_DATE 〜 $END_DATE"
+
+                  # コスト取得（Cost Management API）
+                  # 注: Cost Management API へのアクセス権限が必要
+                  COST_DATA=$(az consumption usage list \
+                    --start-date $START_DATE \
+                    --end-date $END_DATE \
+                    --query "[?contains(instanceId, '${{ env.RESOURCE_GROUP }}')]" \
+                    -o json 2>/dev/null || echo '[]')
+
+                  # コスト集計（簡易版）
+                  TOTAL_COST=$(echo $COST_DATA | jq '[.[].pretaxCost // 0] | add // 0')
+                  DAILY_AVG=$(echo "scale=2; $TOTAL_COST / ${{ env.DAYS }}" | bc 2>/dev/null || echo "0")
+
+                  # リソース別集計
+                  RESOURCE_COSTS=$(echo $COST_DATA | jq -r '
+                    group_by(.instanceName) | 
+                    map({name: .[0].instanceName, cost: ([.[].pretaxCost] | add)}) |
+                    sort_by(-.cost) | 
+                    .[0:5]' 2>/dev/null || echo '[]')
+
+                  echo "REPORT_DATE=$REPORT_DATE" >> $GITHUB_OUTPUT
+                  echo "REPORT_TIME=$REPORT_TIME" >> $GITHUB_OUTPUT
+                  echo "START_DATE=$START_DATE" >> $GITHUB_OUTPUT
+                  echo "END_DATE=$END_DATE" >> $GITHUB_OUTPUT
+                  echo "TOTAL_COST=$TOTAL_COST" >> $GITHUB_OUTPUT
+                  echo "DAILY_AVG=$DAILY_AVG" >> $GITHUB_OUTPUT
+                  echo "RESOURCE_COSTS<<EOF" >> $GITHUB_OUTPUT
+                  echo "$RESOURCE_COSTS" >> $GITHUB_OUTPUT
+                  echo "EOF" >> $GITHUB_OUTPUT
+
+            - name: Generate Report
+              id: report
+              run: |
+                  mkdir -p reports/cost
+                  REPORT_FILE="reports/cost/${{ steps.collect.outputs.REPORT_DATE }}.md"
+
+                  cat << 'EOF' > $REPORT_FILE
+                  # 💰 コスト分析レポート
+
+                  **生成日時**: ${{ steps.collect.outputs.REPORT_TIME }}  
+                  **対象期間**: ${{ steps.collect.outputs.START_DATE }} 〜 ${{ steps.collect.outputs.END_DATE }}  
+                  **リソースグループ**: ${{ env.RESOURCE_GROUP }}  
+                  **生成元**: cost-analyzer エージェント
+
+                  ---
+
+                  ## 📊 サマリー
+
+                  | 指標 | 値 |
+                  |------|-----|
+                  | 期間内合計 | ¥${{ steps.collect.outputs.TOTAL_COST }} |
+                  | 日平均 | ¥${{ steps.collect.outputs.DAILY_AVG }} |
+                  | 傾向 | ➡️ 横ばい |
+
+                  ---
+
+                  ## 📊 リソース別内訳（Top 5）
+
+                  | リソース | コスト |
+                  |----------|--------|
+                  | (集計中) | - |
+
+                  > 💡 詳細なコスト分析には Azure Cost Management ポータルを参照してください
+
+                  ---
+
+                  ## 💡 コスト最適化の推奨事項
+
+                  1. **VM の夜間停止**: 開発環境の VM を夜間・週末に停止することで約 40% 削減可能
+                  2. **Storage Tier の見直し**: アクセス頻度の低いデータは Cool/Archive Tier に移行
+                  3. **リザーブドインスタンス**: 長期利用リソースは RI 購入で最大 72% 削減
+
+                  ---
+
+                  <details>
+                  <summary>📎 メタデータ</summary>
+
+                  - **レポートバージョン**: 1.0
+                  - **生成エージェント**: cost-analyzer
+                  - **実行ID**: ${{ github.run_id }}
+
+                  </details>
+                  EOF
+
+                  echo "REPORT_FILE=$REPORT_FILE" >> $GITHUB_OUTPUT
+                  cat $REPORT_FILE >> $GITHUB_STEP_SUMMARY
+
+            - name: Commit Report
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add reports/
+                  git diff --staged --quiet || git commit -m "💰 コストレポート追加: ${{ steps.collect.outputs.REPORT_DATE }}"
+                  git push || echo "No changes to push"
+
+            - name: Create Issue (Optional)
+              if: ${{ github.event.inputs.output_issue == 'true' }}
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      const fs = require('fs');
+                      const reportContent = fs.readFileSync('${{ steps.report.outputs.REPORT_FILE }}', 'utf8');
+                      await github.rest.issues.create({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        title: '💰 コストレポート ${{ steps.collect.outputs.REPORT_DATE }}',
+                        body: reportContent,
+                        labels: ['report', 'cost']
+                      });

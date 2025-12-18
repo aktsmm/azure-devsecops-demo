@@ -1,0 +1,186 @@
+# ワークフロー健全性レポート生成ワークフロー
+# GitHub Actions のワークフロー実行状況を分析してレポートを生成
+
+name: "🔄 Workflow Health Report"
+run-name: "🔄 Workflow Health Report – triggered by ${{ github.actor }}"
+
+on:
+    workflow_dispatch:
+        inputs:
+            days:
+                description: "分析期間（日数）"
+                required: false
+                default: "7"
+            output_issue:
+                description: "Issue に投稿する"
+                type: boolean
+                default: false
+    schedule:
+        # 毎週月曜 11:00 JST (02:00 UTC)
+        - cron: "0 2 * * 1"
+
+permissions:
+    contents: write
+    issues: write
+    actions: read
+
+jobs:
+    generate-report:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Collect Workflow Data
+              id: collect
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  echo "🔄 ワークフロー実行履歴を収集中..."
+
+                  REPORT_DATE=$(date +%Y-%m-%d)
+                  REPORT_TIME=$(date +%Y-%m-%dT%H:%M:%SZ)
+                  DAYS=${{ github.event.inputs.days || '7' }}
+                  START_DATE=$(date -d "-${DAYS} days" +%Y-%m-%dT00:00:00Z)
+
+                  # ワークフロー実行履歴を取得
+                  RUNS=$(gh run list --limit 100 --json workflowName,status,conclusion,createdAt,updatedAt \
+                    --jq "[.[] | select(.createdAt >= \"$START_DATE\")]")
+
+                  # 集計
+                  TOTAL=$(echo $RUNS | jq 'length')
+                  SUCCESS=$(echo $RUNS | jq '[.[] | select(.conclusion=="success")] | length')
+                  FAILURE=$(echo $RUNS | jq '[.[] | select(.conclusion=="failure")] | length')
+                  CANCELLED=$(echo $RUNS | jq '[.[] | select(.conclusion=="cancelled")] | length')
+                  SKIPPED=$(echo $RUNS | jq '[.[] | select(.conclusion=="skipped")] | length')
+
+                  # 成功率計算
+                  if [ $TOTAL -gt 0 ]; then
+                    SUCCESS_RATE=$(echo "scale=1; $SUCCESS * 100 / $TOTAL" | bc)
+                  else
+                    SUCCESS_RATE="0"
+                  fi
+
+                  # ワークフロー別集計
+                  WORKFLOW_STATS=$(echo $RUNS | jq -r '
+                    group_by(.workflowName) |
+                    map({
+                      name: .[0].workflowName,
+                      total: length,
+                      success: ([.[] | select(.conclusion=="success")] | length),
+                      failure: ([.[] | select(.conclusion=="failure")] | length)
+                    }) |
+                    sort_by(-.total)')
+
+                  echo "REPORT_DATE=$REPORT_DATE" >> $GITHUB_OUTPUT
+                  echo "REPORT_TIME=$REPORT_TIME" >> $GITHUB_OUTPUT
+                  echo "DAYS=$DAYS" >> $GITHUB_OUTPUT
+                  echo "TOTAL=$TOTAL" >> $GITHUB_OUTPUT
+                  echo "SUCCESS=$SUCCESS" >> $GITHUB_OUTPUT
+                  echo "FAILURE=$FAILURE" >> $GITHUB_OUTPUT
+                  echo "CANCELLED=$CANCELLED" >> $GITHUB_OUTPUT
+                  echo "SKIPPED=$SKIPPED" >> $GITHUB_OUTPUT
+                  echo "SUCCESS_RATE=$SUCCESS_RATE" >> $GITHUB_OUTPUT
+                  echo "WORKFLOW_STATS<<EOF" >> $GITHUB_OUTPUT
+                  echo "$WORKFLOW_STATS" >> $GITHUB_OUTPUT
+                  echo "EOF" >> $GITHUB_OUTPUT
+
+            - name: Generate Report
+              id: report
+              run: |
+                  mkdir -p reports/workflow-health
+                  REPORT_FILE="reports/workflow-health/${{ steps.collect.outputs.REPORT_DATE }}.md"
+
+                  # 成功率バッジ
+                  RATE=${{ steps.collect.outputs.SUCCESS_RATE }}
+                  if (( $(echo "$RATE >= 90" | bc -l) )); then RATE_BADGE="🟢 Excellent";
+                  elif (( $(echo "$RATE >= 70" | bc -l) )); then RATE_BADGE="🟡 Good";
+                  elif (( $(echo "$RATE >= 50" | bc -l) )); then RATE_BADGE="🟠 Fair";
+                  else RATE_BADGE="🔴 Needs Improvement"; fi
+
+                  # ワークフロー別テーブル生成
+                  WF_TABLE=$(echo '${{ steps.collect.outputs.WORKFLOW_STATS }}' | jq -r '
+                    .[] | "| \(.name) | \(.total) | \(.success) | \(.failure) | \(if .total > 0 then (.success * 100 / .total | floor) else 0 end)% |"
+                  ' 2>/dev/null || echo "| - | - | - | - | - |")
+
+                  cat << EOF > $REPORT_FILE
+                  # 🔄 ワークフロー健全性レポート
+
+                  **生成日時**: ${{ steps.collect.outputs.REPORT_TIME }}  
+                  **対象期間**: 過去 ${{ steps.collect.outputs.DAYS }} 日間  
+                  **リポジトリ**: ${{ github.repository }}  
+                  **生成元**: workflow-health エージェント
+
+                  ---
+
+                  ## 📊 サマリー
+
+                  | 指標 | 値 | 評価 |
+                  |------|-----|------|
+                  | **成功率** | ${{ steps.collect.outputs.SUCCESS_RATE }}% | $RATE_BADGE |
+                  | 総実行数 | ${{ steps.collect.outputs.TOTAL }} | - |
+
+                  ---
+
+                  ## 📈 実行結果内訳
+
+                  | 結果 | 件数 | 割合 |
+                  |------|------|------|
+                  | ✅ 成功 | ${{ steps.collect.outputs.SUCCESS }} | - |
+                  | ❌ 失敗 | ${{ steps.collect.outputs.FAILURE }} | - |
+                  | ⏸️ キャンセル | ${{ steps.collect.outputs.CANCELLED }} | - |
+                  | ⏭️ スキップ | ${{ steps.collect.outputs.SKIPPED }} | - |
+
+                  ---
+
+                  ## 📋 ワークフロー別
+
+                  | ワークフロー | 実行数 | 成功 | 失敗 | 成功率 |
+                  |--------------|--------|------|------|--------|
+                  $WF_TABLE
+
+                  ---
+
+                  ## 💡 推奨アクション
+
+                  1. **失敗が多いワークフローを優先的に改善**
+                  2. **flaky tests の特定と修正**
+                  3. **タイムアウト値の適正化**
+
+                  ---
+
+                  <details>
+                  <summary>📎 メタデータ</summary>
+
+                  - **レポートバージョン**: 1.0
+                  - **生成エージェント**: workflow-health
+                  - **実行ID**: ${{ github.run_id }}
+
+                  </details>
+                  EOF
+
+                  echo "REPORT_FILE=$REPORT_FILE" >> $GITHUB_OUTPUT
+                  cat $REPORT_FILE >> $GITHUB_STEP_SUMMARY
+
+            - name: Commit Report
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add reports/
+                  git diff --staged --quiet || git commit -m "🔄 ワークフローヘルスレポート追加: ${{ steps.collect.outputs.REPORT_DATE }}"
+                  git push || echo "No changes to push"
+
+            - name: Create Issue (Optional)
+              if: ${{ github.event.inputs.output_issue == 'true' }}
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      const fs = require('fs');
+                      const reportContent = fs.readFileSync('${{ steps.report.outputs.REPORT_FILE }}', 'utf8');
+                      await github.rest.issues.create({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        title: '🔄 ワークフロー健全性レポート ${{ steps.collect.outputs.REPORT_DATE }}',
+                        body: reportContent,
+                        labels: ['report', 'workflow-health']
+                      });
